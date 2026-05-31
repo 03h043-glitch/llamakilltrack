@@ -1,10 +1,10 @@
-# XToLevel
+# LlamaToLevel
 
-XToLevel is a lightweight WoW Classic addon that shows how many more kills it should take to reach your next level based on the XP from your most recent kill.
+LlamaToLevel is a lightweight WoW Classic addon that shows how many more kills it should take to reach your next level based on the XP from your most recent kill.
 
 ## Install
 
-Copy the `XToLevel` folder into:
+Copy the `LlamaToLevel` folder into:
 
 ```text
 World of Warcraft\_classic_\Interface\AddOns\
@@ -24,12 +24,13 @@ Restart the game or run `/reload`.
 - A floating message appears near the top of the screen.
 - The small on-screen tracker shows the same estimate.
 - Left-drag the tracker to move it.
-- Right-click the tracker, or type `/xtl`, to open settings.
+- Right-click the tracker, or type `/llt`, to open settings.
 
 ## Commands
 
 ```text
-/xtl        Toggle settings
-/xtl test   Show a test floating message
-/xtl reset  Reset tracker position, size, and opacity
+/llt                Toggle settings
+/llamatolevel       Toggle settings
+/llt test           Show a test floating message
+/llt reset          Reset tracker position, size, and opacity
 ```
