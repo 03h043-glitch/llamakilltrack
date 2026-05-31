@@ -1,8 +1,8 @@
 ## Interface: 11508, 20505, 38001, 40402, 50503, 50504
 ## Title: LlamaToLevel
-## Notes: Shows kills remaining to your next level based on your most recent kill XP.
+## Notes: Shows kills and quests remaining to your next level based on recent XP gains.
 ## Author: Codex
-## Version: 1.0.0
+## Version: 1.1.0
 ## SavedVariablesPerCharacter: LlamaToLevelDB
 
 LlamaToLevel.lua
