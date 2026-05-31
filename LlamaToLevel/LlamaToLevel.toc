@@ -6,3 +6,5 @@
 ## SavedVariablesPerCharacter: LlamaToLevelDB
 
 LlamaToLevel.lua
+Tracker.lua
+Settings.lua
