@@ -1,29 +1,42 @@
-local ADDON_NAME = ...
+local ADDON_NAME, LTL = ...
 
-local DEFAULTS = {
+LTL.name = ADDON_NAME
+LTL.maxSamples = 5
+LTL.killXPGraceSeconds = 2.5
+LTL.questDuplicateSeconds = 0.4
+LTL.controls = {}
+LTL.killGains = {}
+LTL.questGains = {}
+LTL.recentKillAt = 0
+LTL.recentQuestGain = nil
+LTL.recentQuestGainAt = 0
+LTL.recentQuestTurnInAt = 0
+
+LTL.defaults = {
     x = 0,
     y = 160,
     scale = 1,
-    opacity = 0.85,
+    windowOpacity = 0.55,
+    textOpacity = 1,
+    bgR = 0,
+    bgG = 0,
+    bgB = 0,
     locked = false,
     showTracker = true,
     showFloating = true,
-    lastGain = nil,
-    lastKills = nil,
-    lastRemaining = nil,
 }
 
-local db
 local events = CreateFrame("Frame")
-local tracker
-local trackerValue
-local trackerDetail
-local floatingText
-local floatingAnimation
-local settingsFrame
-local controls = {}
 
-local function CopyDefaults(target, defaults)
+function LTL.Now()
+    if GetTime then
+        return GetTime()
+    end
+
+    return 0
+end
+
+function LTL.CopyDefaults(target, defaults)
     target = target or {}
 
     for key, value in pairs(defaults) do
@@ -35,7 +48,7 @@ local function CopyDefaults(target, defaults)
     return target
 end
 
-local function Round(value)
+function LTL.Round(value)
     if value >= 0 then
         return math.floor(value + 0.5)
     end
@@ -43,7 +56,7 @@ local function Round(value)
     return math.ceil(value - 0.5)
 end
 
-local function Clamp(value, minValue, maxValue)
+function LTL.Clamp(value, minValue, maxValue)
     if value < minValue then
         return minValue
     end
@@ -55,7 +68,7 @@ local function Clamp(value, minValue, maxValue)
     return value
 end
 
-local function FormatNumber(value)
+function LTL.FormatNumber(value)
     if BreakUpLargeNumbers then
         return BreakUpLargeNumbers(value)
     end
@@ -68,27 +81,23 @@ local function FormatNumber(value)
     return left .. (num:reverse():gsub("(%d%d%d)", "%1,"):reverse()) .. right
 end
 
-local function FormatKills(kills)
-    if not kills then
-        return "--"
+function LTL.FormatEstimate(value, singular, plural)
+    if not value then
+        return "-- " .. plural
     end
 
-    if kills == 1 then
-        return "1 kill"
+    if value == 1 then
+        return "1 " .. singular
     end
 
-    return FormatNumber(kills) .. " kills"
+    return LTL.FormatNumber(value) .. " " .. plural
 end
 
-local function FormatSliderValue(value, step)
-    if step >= 1 then
-        return tostring(Round(value))
-    end
-
-    return string.format("%.2f", value)
+function LTL.FormatProgressText()
+    return LTL.FormatEstimate(LTL.killEstimate, "kill", "kills") .. " / " .. LTL.FormatEstimate(LTL.questEstimate, "quest", "quests")
 end
 
-local function GetRemainingXP()
+function LTL.GetRemainingXP()
     local currentXP = UnitXP("player") or 0
     local maxXP = UnitXPMax("player") or 0
 
@@ -99,394 +108,61 @@ local function GetRemainingXP()
     return math.max(maxXP - currentXP, 0)
 end
 
-local function ApplyTrackerSettings()
-    if not tracker or not db then
-        return
-    end
+function LTL.AddSample(samples, gain)
+    table.insert(samples, gain)
 
-    tracker:ClearAllPoints()
-    tracker:SetPoint("CENTER", UIParent, "CENTER", db.x or 0, db.y or 160)
-    tracker:SetScale(db.scale or 1)
-    tracker:SetAlpha(db.opacity or 0.85)
-
-    if db.showTracker then
-        tracker:Show()
-    else
-        tracker:Hide()
+    while #samples > LTL.maxSamples do
+        table.remove(samples, 1)
     end
 end
 
-local function UpdateTracker()
-    if not trackerValue or not trackerDetail or not db then
-        return
+function LTL.AverageSamples(samples)
+    if #samples == 0 then
+        return nil
     end
 
+    local total = 0
+    for _, gain in ipairs(samples) do
+        total = total + gain
+    end
+
+    return total / #samples
+end
+
+function LTL.EstimateFromAverage(average)
+    if not average or average <= 0 then
+        return nil
+    end
+
+    return math.max(math.ceil(LTL.GetRemainingXP() / average), 0)
+end
+
+function LTL.RecalculateEstimates()
     if UnitXPMax("player") == 0 then
-        trackerValue:SetText("Max level")
-        trackerDetail:SetText("no XP left")
+        LTL.killAverage = nil
+        LTL.questAverage = nil
+        LTL.killEstimate = nil
+        LTL.questEstimate = nil
         return
     end
 
-    if db.lastKills and db.lastGain then
-        trackerValue:SetText(FormatKills(db.lastKills))
-        trackerDetail:SetText("last " .. FormatNumber(db.lastGain) .. " XP")
-    else
-        trackerValue:SetText("-- kills")
-        trackerDetail:SetText("waiting for kill XP")
-    end
+    LTL.killAverage = LTL.AverageSamples(LTL.killGains)
+    LTL.questAverage = LTL.AverageSamples(LTL.questGains)
+    LTL.killEstimate = LTL.EstimateFromAverage(LTL.killAverage)
+    LTL.questEstimate = LTL.EstimateFromAverage(LTL.questAverage)
 end
 
-local function RecalculateFromLastGain()
-    if not db.lastGain then
-        UpdateTracker()
-        return
-    end
-
-    local remaining = GetRemainingXP()
-    db.lastRemaining = remaining
-
-    if UnitXPMax("player") == 0 then
-        db.lastKills = nil
-    else
-        db.lastKills = math.max(math.ceil(remaining / db.lastGain), 0)
-    end
-
-    UpdateTracker()
-end
-
-local function SaveTrackerPosition()
-    local centerX, centerY = tracker:GetCenter()
-    local parentX, parentY = UIParent:GetCenter()
-
-    if not centerX or not centerY or not parentX or not parentY then
-        return
-    end
-
-    db.x = Round(centerX - parentX)
-    db.y = Round(centerY - parentY)
-
-    if controls.xSlider then
-        controls.xSlider:SetValue(db.x)
-    end
-
-    if controls.ySlider then
-        controls.ySlider:SetValue(db.y)
-    end
-end
-
-local function CreateTracker()
-    local template = BackdropTemplateMixin and "BackdropTemplate" or nil
-    tracker = CreateFrame("Frame", "LlamaToLevelTracker", UIParent, template)
-    tracker:SetSize(118, 38)
-    tracker:SetClampedToScreen(true)
-    tracker:SetMovable(true)
-    tracker:EnableMouse(true)
-    tracker:RegisterForDrag("LeftButton")
-
-    if tracker.SetBackdrop then
-        tracker:SetBackdrop({
-            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            tile = true,
-            tileSize = 16,
-            edgeSize = 8,
-            insets = { left = 2, right = 2, top = 2, bottom = 2 },
-        })
-        tracker:SetBackdropColor(0, 0, 0, 0.55)
-        tracker:SetBackdropBorderColor(0.35, 0.85, 0.45, 0.65)
-    end
-
-    local title = tracker:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    title:SetPoint("TOP", tracker, "TOP", 0, -5)
-    title:SetText("To level")
-
-    trackerValue = tracker:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    trackerValue:SetPoint("TOP", title, "BOTTOM", 0, -1)
-    trackerValue:SetJustifyH("CENTER")
-
-    trackerDetail = tracker:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    trackerDetail:SetPoint("TOP", trackerValue, "BOTTOM", 0, -1)
-    trackerDetail:SetJustifyH("CENTER")
-
-    tracker:SetScript("OnDragStart", function(self)
-        if not db.locked then
-            self:StartMoving()
-        end
-    end)
-
-    tracker:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        SaveTrackerPosition()
-    end)
-
-    tracker:SetScript("OnMouseUp", function(_, button)
-        if button == "RightButton" then
-            if settingsFrame and settingsFrame:IsShown() then
-                settingsFrame:Hide()
-            else
-                if settingsFrame then
-                    settingsFrame:Show()
-                end
-            end
-        end
-    end)
-
-    tracker:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:AddLine("LlamaToLevel")
-        GameTooltip:AddLine("Left-drag to move. Right-click or /llt for settings.", 0.85, 0.85, 0.85, true)
-        if db.lastGain and db.lastKills then
-            GameTooltip:AddLine(FormatKills(db.lastKills) .. " at " .. FormatNumber(db.lastGain) .. " XP per kill.", 0.45, 1, 0.45, true)
-        end
-        GameTooltip:Show()
-    end)
-
-    tracker:SetScript("OnLeave", function()
-        GameTooltip:Hide()
-    end)
-
-    ApplyTrackerSettings()
-    UpdateTracker()
-end
-
-local function CreateFloatingText()
-    floatingText = UIParent:CreateFontString("LlamaToLevelFloatingText", "OVERLAY", "CombatTextFont")
-    floatingText:SetPoint("TOP", UIParent, "TOP", 0, -170)
-    floatingText:SetTextColor(0.45, 1, 0.45)
-    floatingText:SetAlpha(0)
-
-    if floatingText.SetShadowColor then
-        floatingText:SetShadowColor(0, 0, 0, 1)
-        floatingText:SetShadowOffset(1, -1)
-    end
-
-    floatingAnimation = floatingText:CreateAnimationGroup()
-    floatingAnimation:SetScript("OnFinished", function()
-        floatingText:SetAlpha(0)
-    end)
-    floatingAnimation:SetScript("OnStop", function()
-        floatingText:SetAlpha(0)
-    end)
-
-    local hold = floatingAnimation:CreateAnimation("Alpha")
-    hold:SetOrder(1)
-    hold:SetFromAlpha(1)
-    hold:SetToAlpha(1)
-    hold:SetDuration(0.55)
-
-    local rise = floatingAnimation:CreateAnimation("Translation")
-    rise:SetOrder(2)
-    rise:SetOffset(0, 42)
-    rise:SetDuration(1.15)
-    rise:SetSmoothing("OUT")
-
-    local fade = floatingAnimation:CreateAnimation("Alpha")
-    fade:SetOrder(2)
-    fade:SetFromAlpha(1)
-    fade:SetToAlpha(0)
-    fade:SetDuration(1.15)
-    fade:SetSmoothing("OUT")
-end
-
-local function ShowFloatingMessage(message)
-    if not db.showFloating or not floatingText or not floatingAnimation then
-        return
-    end
-
-    if floatingAnimation:IsPlaying() then
-        floatingAnimation:Stop()
-    end
-
-    floatingText:ClearAllPoints()
-    floatingText:SetPoint("TOP", UIParent, "TOP", 0, -170)
-    floatingText:SetText(message)
-    floatingText:SetAlpha(1)
-    floatingAnimation:Play()
-end
-
-local function CreateCheckButton(parent, name, label, key, x, y)
-    local check = CreateFrame("CheckButton", name, parent, "InterfaceOptionsCheckButtonTemplate")
-    check:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
-    _G[name .. "Text"]:SetText(label)
-    check:SetChecked(db[key])
-    check:SetScript("OnClick", function(self)
-        db[key] = self:GetChecked() and true or false
-        ApplyTrackerSettings()
-    end)
-
-    return check
-end
-
-local function CreateSlider(parent, name, label, minValue, maxValue, step, value, x, y, onChanged)
-    local slider = CreateFrame("Slider", name, parent, "OptionsSliderTemplate")
-    slider:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
-    slider:SetWidth(230)
-    slider:SetMinMaxValues(minValue, maxValue)
-    slider:SetValueStep(step)
-    slider:SetValue(value)
-
-    if slider.SetObeyStepOnDrag then
-        slider:SetObeyStepOnDrag(true)
-    end
-
-    _G[name .. "Text"]:SetText(label)
-    _G[name .. "Low"]:SetText(tostring(minValue))
-    _G[name .. "High"]:SetText(tostring(maxValue))
-
-    slider:SetScript("OnValueChanged", function(self, newValue)
-        newValue = Round(newValue / step) * step
-        onChanged(newValue)
-        self.Value:SetText(FormatSliderValue(newValue, step))
-    end)
-
-    slider.Value = slider:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-    slider.Value:SetPoint("TOP", slider, "BOTTOM", 0, -4)
-    slider.Value:SetText(FormatSliderValue(value, step))
-
-    return slider
-end
-
-local function RefreshPositionSliderRanges()
-    if not controls.xSlider or not controls.ySlider then
-        return
-    end
-
-    local width = UIParent:GetWidth() or 1200
-    local height = UIParent:GetHeight() or 800
-    local xLimit = math.floor((width / 2) - 60)
-    local yLimit = math.floor((height / 2) - 30)
-
-    controls.xSlider:SetMinMaxValues(-xLimit, xLimit)
-    controls.ySlider:SetMinMaxValues(-yLimit, yLimit)
-    _G[controls.xSlider:GetName() .. "Low"]:SetText(tostring(-xLimit))
-    _G[controls.xSlider:GetName() .. "High"]:SetText(tostring(xLimit))
-    _G[controls.ySlider:GetName() .. "Low"]:SetText(tostring(-yLimit))
-    _G[controls.ySlider:GetName() .. "High"]:SetText(tostring(yLimit))
-
-    db.x = Clamp(db.x or 0, -xLimit, xLimit)
-    db.y = Clamp(db.y or 160, -yLimit, yLimit)
-    controls.xSlider:SetValue(db.x)
-    controls.ySlider:SetValue(db.y)
-end
-
-local function CreateSettingsFrame()
-    local template = BackdropTemplateMixin and "BackdropTemplate" or nil
-    settingsFrame = CreateFrame("Frame", "LlamaToLevelSettingsFrame", UIParent, template)
-    settingsFrame:SetSize(340, 430)
-    settingsFrame:SetPoint("CENTER")
-    settingsFrame:SetFrameStrata("DIALOG")
-    settingsFrame:SetMovable(true)
-    settingsFrame:EnableMouse(true)
-    settingsFrame:RegisterForDrag("LeftButton")
-    settingsFrame:Hide()
-
-    if settingsFrame.SetBackdrop then
-        settingsFrame:SetBackdrop({
-            bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-            edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-            tile = true,
-            tileSize = 32,
-            edgeSize = 32,
-            insets = { left = 11, right = 12, top = 12, bottom = 11 },
-        })
-    end
-
-    settingsFrame:SetScript("OnDragStart", function(self)
-        self:StartMoving()
-    end)
-
-    settingsFrame:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-    end)
-
-    settingsFrame:SetScript("OnShow", RefreshPositionSliderRanges)
-
-    local title = settingsFrame:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-    title:SetPoint("TOP", settingsFrame, "TOP", 0, -18)
-    title:SetText("LlamaToLevel")
-
-    local close = CreateFrame("Button", nil, settingsFrame, "UIPanelCloseButton")
-    close:SetPoint("TOPRIGHT", settingsFrame, "TOPRIGHT", -5, -5)
-
-    controls.showTracker = CreateCheckButton(settingsFrame, "LlamaToLevelShowTrackerCheck", "Show tracker", "showTracker", 22, -52)
-    controls.showFloating = CreateCheckButton(settingsFrame, "LlamaToLevelShowFloatingCheck", "Show floating text", "showFloating", 22, -82)
-    controls.locked = CreateCheckButton(settingsFrame, "LlamaToLevelLockedCheck", "Lock tracker", "locked", 22, -112)
-
-    controls.scaleSlider = CreateSlider(settingsFrame, "LlamaToLevelScaleSlider", "Tracker size", 0.60, 1.80, 0.05, db.scale, 55, -160, function(value)
-        db.scale = value
-        ApplyTrackerSettings()
-    end)
-
-    controls.opacitySlider = CreateSlider(settingsFrame, "LlamaToLevelOpacitySlider", "Tracker opacity", 0.20, 1.00, 0.05, db.opacity, 55, -218, function(value)
-        db.opacity = value
-        ApplyTrackerSettings()
-    end)
-
-    controls.xSlider = CreateSlider(settingsFrame, "LlamaToLevelXSlider", "Horizontal position", -600, 600, 1, db.x, 55, -276, function(value)
-        db.x = value
-        ApplyTrackerSettings()
-    end)
-
-    controls.ySlider = CreateSlider(settingsFrame, "LlamaToLevelYSlider", "Vertical position", -400, 400, 1, db.y, 55, -334, function(value)
-        db.y = value
-        ApplyTrackerSettings()
-    end)
-
-    local reset = CreateFrame("Button", nil, settingsFrame, "UIPanelButtonTemplate")
-    reset:SetSize(92, 22)
-    reset:SetPoint("BOTTOMLEFT", settingsFrame, "BOTTOMLEFT", 22, 16)
-    reset:SetText("Reset")
-    reset:SetScript("OnClick", function()
-        db.x = DEFAULTS.x
-        db.y = DEFAULTS.y
-        db.scale = DEFAULTS.scale
-        db.opacity = DEFAULTS.opacity
-        db.locked = DEFAULTS.locked
-
-        controls.locked:SetChecked(db.locked)
-        controls.scaleSlider:SetValue(db.scale)
-        controls.opacitySlider:SetValue(db.opacity)
-        controls.xSlider:SetValue(db.x)
-        controls.ySlider:SetValue(db.y)
-        ApplyTrackerSettings()
-    end)
-
-    local test = CreateFrame("Button", nil, settingsFrame, "UIPanelButtonTemplate")
-    test:SetSize(92, 22)
-    test:SetPoint("LEFT", reset, "RIGHT", 10, 0)
-    test:SetText("Test")
-    test:SetScript("OnClick", function()
-        ShowFloatingMessage("12 kills to level (last kill: 240 XP)")
-    end)
-
-    local hide = CreateFrame("Button", nil, settingsFrame, "UIPanelButtonTemplate")
-    hide:SetSize(92, 22)
-    hide:SetPoint("LEFT", test, "RIGHT", 10, 0)
-    hide:SetText("Close")
-    hide:SetScript("OnClick", function()
-        settingsFrame:Hide()
-    end)
-end
-
-local function ExtractXP(message)
+function LTL.ExtractXP(message)
     if not message or message == "" then
         return nil
     end
 
     local normalized = message:gsub(",", "")
     local amount = normalized:match("[Gg]ain%s+(%d+)%s+experience")
-
-    if not amount then
-        amount = normalized:match("(%d+)%s+experience")
-    end
-
-    if not amount then
-        amount = normalized:match("[Gg]ain%s+(%d+)%s+XP")
-    end
-
-    if not amount then
-        amount = normalized:match("(%d+)%s+XP")
-    end
+        or normalized:match("(%d+)%s+experience")
+        or normalized:match("[Gg]ain%s+(%d+)%s+[Xx][Pp]")
+        or normalized:match("(%d+)%s+[Xx][Pp]")
+        or normalized:match("[Ee]xperience%s+[Gg]ained:%s*(%d+)")
 
     amount = tonumber(amount)
 
@@ -497,48 +173,82 @@ local function ExtractXP(message)
     return amount
 end
 
-local function ProcessKillXP(gain)
-    local remaining = GetRemainingXP()
+function LTL.IsKillXPMessage(message)
+    local lower = string.lower(message or "")
 
-    db.lastGain = gain
-    db.lastRemaining = remaining
+    if lower:find(" dies", 1, true) or lower:find("dies,", 1, true) or lower:find(" slain", 1, true) then
+        return true
+    end
+
+    if (LTL.Now() - LTL.recentQuestTurnInAt) <= LTL.killXPGraceSeconds then
+        return false
+    end
+
+    return (LTL.Now() - LTL.recentKillAt) <= LTL.killXPGraceSeconds
+end
+
+function LTL.ProcessQuestXP(gain)
+    if LTL.recentQuestGain == gain and (LTL.Now() - LTL.recentQuestGainAt) <= LTL.questDuplicateSeconds then
+        return
+    end
+
+    LTL.recentQuestGain = gain
+    LTL.recentQuestGainAt = LTL.Now()
+    LTL.AddSample(LTL.questGains, gain)
+
+    if LTL.UpdateTracker then
+        LTL.UpdateTracker()
+    end
+end
+
+function LTL.ProcessKillXP(gain)
+    LTL.AddSample(LTL.killGains, gain)
+
+    if LTL.UpdateTracker then
+        LTL.UpdateTracker()
+    end
+
+    if not LTL.ShowFloatingMessage then
+        return
+    end
 
     if UnitXPMax("player") == 0 then
-        db.lastKills = nil
-        UpdateTracker()
-        ShowFloatingMessage("Max level reached")
-        return
-    end
-
-    db.lastKills = math.max(math.ceil(remaining / gain), 0)
-    UpdateTracker()
-
-    if db.lastKills <= 0 then
-        ShowFloatingMessage("Level reached! Last kill gave " .. FormatNumber(gain) .. " XP")
+        LTL.ShowFloatingMessage("Max level reached")
     else
-        ShowFloatingMessage(FormatKills(db.lastKills) .. " to level (last kill: " .. FormatNumber(gain) .. " XP)")
+        LTL.ShowFloatingMessage(LTL.FormatProgressText() .. " to level")
     end
 end
 
-local function DelayProcessKillXP(gain)
+function LTL.DelayProcess(callback, gain)
     if C_Timer and C_Timer.After then
         C_Timer.After(0.05, function()
-            ProcessKillXP(gain)
+            callback(gain)
         end)
     else
-        ProcessKillXP(gain)
+        callback(gain)
     end
 end
 
-local function OpenSettings()
-    if not settingsFrame then
-        return
+local function ResetVisualSettings()
+    local db = LTL.db
+    local defaults = LTL.defaults
+
+    db.x = defaults.x
+    db.y = defaults.y
+    db.scale = defaults.scale
+    db.windowOpacity = defaults.windowOpacity
+    db.textOpacity = defaults.textOpacity
+    db.bgR = defaults.bgR
+    db.bgG = defaults.bgG
+    db.bgB = defaults.bgB
+    db.locked = defaults.locked
+
+    if LTL.SyncSettingsControls then
+        LTL.SyncSettingsControls()
     end
 
-    if settingsFrame:IsShown() then
-        settingsFrame:Hide()
-    else
-        settingsFrame:Show()
+    if LTL.UpdateTracker then
+        LTL.UpdateTracker()
     end
 end
 
@@ -550,34 +260,50 @@ local function RegisterSlashCommands()
         input = string.lower(strtrim(input or ""))
 
         if input == "reset" then
-            db.x = DEFAULTS.x
-            db.y = DEFAULTS.y
-            db.scale = DEFAULTS.scale
-            db.opacity = DEFAULTS.opacity
-            ApplyTrackerSettings()
-            UpdateTracker()
+            ResetVisualSettings()
             print(ADDON_NAME .. ": tracker reset.")
-        elseif input == "test" then
-            ShowFloatingMessage("12 kills to level (last kill: 240 XP)")
-        else
-            OpenSettings()
+        elseif input == "test" and LTL.ShowFloatingMessage then
+            LTL.ShowFloatingMessage("12 kills / 3 quests to level")
+        elseif LTL.OpenSettings then
+            LTL.OpenSettings()
         end
     end
 end
 
 local function Initialize()
-    LlamaToLevelDB = CopyDefaults(LlamaToLevelDB, DEFAULTS)
-    db = LlamaToLevelDB
+    LlamaToLevelDB = LlamaToLevelDB or {}
 
-    CreateTracker()
-    CreateFloatingText()
-    CreateSettingsFrame()
+    if LlamaToLevelDB.windowOpacity == nil and LlamaToLevelDB.opacity ~= nil then
+        LlamaToLevelDB.windowOpacity = LlamaToLevelDB.opacity
+    end
+
+    LTL.db = LTL.CopyDefaults(LlamaToLevelDB, LTL.defaults)
+    LlamaToLevelDB = LTL.db
+
+    if LTL.CreateTracker then
+        LTL.CreateTracker()
+    end
+    if LTL.CreateFloatingText then
+        LTL.CreateFloatingText()
+    end
+    if LTL.CreateSettingsFrame then
+        LTL.CreateSettingsFrame()
+    end
+
     RegisterSlashCommands()
 end
 
-events:RegisterEvent("PLAYER_LOGIN")
-events:RegisterEvent("PLAYER_LEVEL_UP")
-events:RegisterEvent("CHAT_MSG_COMBAT_XP_GAIN")
+local function RegisterAddonEvent(eventName)
+    pcall(events.RegisterEvent, events, eventName)
+end
+
+RegisterAddonEvent("PLAYER_LOGIN")
+RegisterAddonEvent("PLAYER_LEVEL_UP")
+RegisterAddonEvent("PLAYER_XP_UPDATE")
+RegisterAddonEvent("CHAT_MSG_COMBAT_XP_GAIN")
+RegisterAddonEvent("CHAT_MSG_SYSTEM")
+RegisterAddonEvent("QUEST_TURNED_IN")
+RegisterAddonEvent("COMBAT_LOG_EVENT_UNFILTERED")
 
 events:SetScript("OnEvent", function(_, eventName, ...)
     if eventName == "PLAYER_LOGIN" then
@@ -585,25 +311,64 @@ events:SetScript("OnEvent", function(_, eventName, ...)
         return
     end
 
-    if not db then
+    if eventName == "COMBAT_LOG_EVENT_UNFILTERED" then
+        local _, subEvent
+
+        if CombatLogGetCurrentEventInfo then
+            _, subEvent = CombatLogGetCurrentEventInfo()
+        else
+            _, subEvent = ...
+        end
+
+        if subEvent == "PARTY_KILL" then
+            LTL.recentKillAt = LTL.Now()
+        end
         return
     end
 
-    if eventName == "PLAYER_LEVEL_UP" then
+    if not LTL.db then
+        return
+    end
+
+    if eventName == "PLAYER_LEVEL_UP" or eventName == "PLAYER_XP_UPDATE" then
         if C_Timer and C_Timer.After then
-            C_Timer.After(0.10, RecalculateFromLastGain)
-        else
-            RecalculateFromLastGain()
+            C_Timer.After(0.10, LTL.UpdateTracker)
+        elseif LTL.UpdateTracker then
+            LTL.UpdateTracker()
+        end
+        return
+    end
+
+    if eventName == "QUEST_TURNED_IN" then
+        local _, xpReward = ...
+        xpReward = tonumber(xpReward)
+        LTL.recentQuestTurnInAt = LTL.Now()
+
+        if xpReward and xpReward > 0 then
+            LTL.DelayProcess(LTL.ProcessQuestXP, xpReward)
+        end
+        return
+    end
+
+    if eventName == "CHAT_MSG_SYSTEM" then
+        local gain = LTL.ExtractXP(...)
+
+        if gain then
+            LTL.DelayProcess(LTL.ProcessQuestXP, gain)
         end
         return
     end
 
     if eventName == "CHAT_MSG_COMBAT_XP_GAIN" then
         local message = ...
-        local gain = ExtractXP(message)
+        local gain = LTL.ExtractXP(message)
 
         if gain then
-            DelayProcessKillXP(gain)
+            if LTL.IsKillXPMessage(message) then
+                LTL.DelayProcess(LTL.ProcessKillXP, gain)
+            else
+                LTL.DelayProcess(LTL.ProcessQuestXP, gain)
+            end
         end
     end
 end)
