@@ -1,0 +1,8 @@
+## Interface: 11508, 20505, 38001, 40402, 50503, 50504
+## Title: XToLevel
+## Notes: Shows kills remaining to your next level based on your most recent kill XP.
+## Author: Codex
+## Version: 1.0.0
+## SavedVariablesPerCharacter: XToLevelDB
+
+XToLevel.lua
