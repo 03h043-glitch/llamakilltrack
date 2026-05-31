@@ -1,6 +1,12 @@
 # LlamaToLevel
 
-LlamaToLevel is a lightweight WoW Classic addon that shows how many more kills it should take to reach your next level based on the XP from your most recent kill.
+LlamaToLevel is a lightweight WoW Classic addon that estimates how many kills and quests it should take to reach your next level.
+
+## How It Calculates
+
+- Kills are estimated from the average XP of your last five XP-granting kills this session.
+- If you have fewer than five kills this session, it uses the kills available so far.
+- Quests are estimated separately from quest/non-kill XP gains so quest turn-ins do not inflate the kill estimate.
 
 ## Install
 
@@ -22,7 +28,7 @@ Restart the game or run `/reload`.
 
 - Kill something that grants XP.
 - A floating message appears near the top of the screen.
-- The small on-screen tracker shows the same estimate.
+- The small on-screen tracker shows `x kills / x quests`.
 - Left-drag the tracker to move it.
 - Right-click the tracker, or type `/llt`, to open settings.
 
@@ -32,5 +38,5 @@ Restart the game or run `/reload`.
 /llt                Toggle settings
 /llamatolevel       Toggle settings
 /llt test           Show a test floating message
-/llt reset          Reset tracker position, size, and opacity
+/llt reset          Reset tracker position, size, colour, and opacity
 ```
